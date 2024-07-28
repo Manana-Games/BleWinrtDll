@@ -5,6 +5,7 @@
 struct DeviceUpdate {
 	wchar_t id[100];
 	bool isConnectable = false;
+	bool isConnected = false;
 	bool isConnectableUpdated = false;
 	wchar_t name[50];
 	bool nameUpdated = false;

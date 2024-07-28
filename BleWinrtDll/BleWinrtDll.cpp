@@ -224,6 +224,9 @@ void DeviceWatcher_Added(DeviceWatcher sender, DeviceInformation deviceInfo) {
 		deviceUpdate.isConnectable = unbox_value<bool>(deviceInfo.Properties().Lookup(L"System.Devices.Aep.Bluetooth.Le.IsConnectable"));
 		deviceUpdate.isConnectableUpdated = true;
 	}
+	if (deviceInfo.Properties().HasKey(L"System.Devices.Aep.IsConnected")) {
+		deviceUpdate.isConnected = unbox_value<bool>(deviceInfo.Properties().Lookup(L"System.Devices.Aep.IsConnected"));
+	}
 	{
 		lock_guard lock(quitLock);
 		if (quitFlag)
@@ -239,8 +242,11 @@ void DeviceWatcher_Updated(DeviceWatcher sender, DeviceInformationUpdate deviceI
 	DeviceUpdate deviceUpdate;
 	wcscpy_s(deviceUpdate.id, sizeof(deviceUpdate.id) / sizeof(wchar_t), deviceInfoUpdate.Id().c_str());
 	if (deviceInfoUpdate.Properties().HasKey(L"System.Devices.Aep.Bluetooth.Le.IsConnectable")) {
-		deviceUpdate.isConnectable = unbox_value<bool>(deviceInfoUpdate.Properties().Lookup(L"System.Devices.Aep.Bluetooth.Le.IsConnectable"));
+		deviceUpdate.isConnectable = unbox_value<bool>(deviceInfoUpdate.Properties().Lookup(L"System.Devices.Aep.Bluetooth.Le.IsConnectable"));	
 		deviceUpdate.isConnectableUpdated = true;
+	}
+	if (deviceInfoUpdate.Properties().HasKey(L"System.Devices.Aep.IsConnected")) {
+		deviceUpdate.isConnected = unbox_value<bool>(deviceInfoUpdate.Properties().Lookup(L"System.Devices.Aep.IsConnected"));
 	}
 	{
 		lock_guard lock(quitLock);
@@ -386,7 +392,28 @@ fire_and_forget ScanCharacteristicsAsync(wchar_t* deviceId, wchar_t* serviceId) 
 		if (service != nullptr) {
 			GattCharacteristicsResult charScan = co_await service.GetCharacteristicsAsync(BluetoothCacheMode::Uncached);
 			if (charScan.Status() != GattCommunicationStatus::Success)
-				saveError(L"%s:%d Error scanning characteristics from service %s width status %d", __WFILE__, __LINE__, serviceId, (int)charScan.Status());
+			{
+				// Handle different GattCommunicationStatus values
+				switch (charScan.Status())
+				{
+				case GattCommunicationStatus::AccessDenied:
+					saveError(L"%s:%d Access denied while scanning characteristics from service %s. Status code: %d", __WFILE__, __LINE__, serviceId, (int)charScan.Status());
+					break;
+
+				case GattCommunicationStatus::ProtocolError:
+					saveError(L"%s:%d Protocol error while scanning characteristics from service %s. Status code: %d", __WFILE__, __LINE__, serviceId, (int)charScan.Status());
+					break;
+
+
+				case GattCommunicationStatus::Unreachable:
+					saveError(L"%s:%d Device unreachable while scanning characteristics from service %s. Status code: %d", __WFILE__, __LINE__, serviceId, (int)charScan.Status());
+					break;
+
+				default:
+					saveError(L"%s:%d Unknown error %d while scanning characteristics from service %s", __WFILE__, __LINE__, (int)charScan.Status(), serviceId);
+					break;
+				}
+			}
 			else {
 				for (auto c : charScan.Characteristics())
 				{
@@ -402,7 +429,25 @@ fire_and_forget ScanCharacteristicsAsync(wchar_t* deviceId, wchar_t* serviceId) 
 						GattDescriptor descriptor = descriptorScan.Descriptors().GetAt(0);
 						auto nameResult = co_await descriptor.ReadValueAsync();
 						if (nameResult.Status() != GattCommunicationStatus::Success)
-							saveError(L"%s:%d couldn't read user description for charasteristic %s, status %d", __WFILE__, __LINE__, to_hstring(c.Uuid()).c_str(), nameResult.Status());
+						{
+							// Log detailed error information
+							switch (nameResult.Status())
+							{
+							case GattCommunicationStatus::AccessDenied:
+								saveError(L"%s:%d Access denied while reading user description for characteristic %s", __WFILE__, __LINE__, to_hstring(c.Uuid()).c_str());
+								break;
+							case GattCommunicationStatus::ProtocolError:
+								saveError(L"%s:%d Protocol error while reading user description for characteristic %s", __WFILE__, __LINE__, to_hstring(c.Uuid()).c_str());
+								break;
+							case GattCommunicationStatus::Unreachable:
+								saveError(L"%s:%d Device unreachable while reading user description for characteristic %s", __WFILE__, __LINE__, to_hstring(c.Uuid()).c_str());
+								break;
+							default:
+								saveError(L"%s:%d Unknown error %d while reading user description for characteristic %s", __WFILE__, __LINE__, (int)nameResult.Status(), to_hstring(c.Uuid()).c_str());
+								break;
+							}
+						}
+
 						else {
 							auto dataReader = DataReader::FromBuffer(nameResult.Value());
 							auto output = dataReader.ReadString(dataReader.UnconsumedBufferLength());

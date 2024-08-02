@@ -228,7 +228,7 @@ void DeviceWatcher_Added(DeviceWatcher sender, DeviceInformation deviceInfo) {
 		deviceUpdate.isConnected = unbox_value<bool>(deviceInfo.Properties().Lookup(L"System.Devices.Aep.IsConnected"));
 	}
 	if (deviceInfo.Properties().HasKey(L"System.Devices.Aep.SignalStrength")) {
-		deviceUpdate.signalStrength = unbox_value<int>(deviceInfo.Properties().Lookup(L"System.Devices.Aep.SignalStrength"));
+		deviceUpdate.signalStrength = unbox_value<int32_t>(deviceInfo.Properties().Lookup(L"System.Devices.Aep.SignalStrength"));
 	}
 	{
 		lock_guard lock(quitLock);
@@ -252,7 +252,7 @@ void DeviceWatcher_Updated(DeviceWatcher sender, DeviceInformationUpdate deviceI
 		deviceUpdate.isConnected = unbox_value<bool>(deviceInfoUpdate.Properties().Lookup(L"System.Devices.Aep.IsConnected"));
 	}
 	if (deviceInfoUpdate.Properties().HasKey(L"System.Devices.Aep.SignalStrength")) {
-		deviceUpdate.signalStrength = unbox_value<int>(deviceInfoUpdate.Properties().Lookup(L"System.Devices.Aep.SignalStrength"));
+		deviceUpdate.signalStrength = unbox_value<int32_t>(deviceInfoUpdate.Properties().Lookup(L"System.Devices.Aep.SignalStrength"));
 	}
 	{
 		lock_guard lock(quitLock);

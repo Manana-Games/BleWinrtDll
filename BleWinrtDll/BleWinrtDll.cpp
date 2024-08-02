@@ -277,7 +277,7 @@ void StartDeviceScan() {
 		clearError();
 	}
 
-	IVector<hstring> requestedProperties = single_threaded_vector<hstring>({ L"System.Devices.Aep.DeviceAddress", L"System.Devices.Aep.IsConnected", L"System.Devices.Aep.IsConnectable", L"System.Devices.Aep.SignalStrength" L"System.Devices.Aep.Bluetooth.Le.IsConnectable" });
+	IVector<hstring> requestedProperties = single_threaded_vector<hstring>({ L"System.Devices.Aep.DeviceAddress", L"System.Devices.Aep.IsConnected", L"System.Devices.Aep.IsConnectable", L"System.Devices.Aep.SignalStrength", L"System.Devices.Aep.Bluetooth.Le.IsConnectable" });
 	hstring aqsAllBluetoothLEDevices = L"(System.Devices.Aep.ProtocolId:=\"{bb7bb05e-5972-42b5-94fc-76eaa7084d49}\")"; // list Bluetooth LE devices
 	deviceWatcher = DeviceInformation::CreateWatcher(
 		aqsAllBluetoothLEDevices,

@@ -46,15 +46,19 @@ extern "C" {
 
 	__declspec(dllexport) ScanStatus PollService(Service* service, bool block);
 
-	__declspec(dllexport) void ScanCharacteristics(wchar_t* deviceId, wchar_t* serviceId);
+	__declspec(dllexport) void ScanCharacteristics(wchar_t* deviceId, wchar_t* serviceId, bool block);
 
 	__declspec(dllexport) ScanStatus PollCharacteristic(Characteristic* characteristic, bool block);
 
 	__declspec(dllexport) bool SubscribeCharacteristic(wchar_t* deviceId, wchar_t* serviceId, wchar_t* characteristicId, bool block);
 
+	__declspec(dllexport) void ReadData(wchar_t* deviceId, wchar_t* serviceId, wchar_t* characteristicId);
+
 	__declspec(dllexport) bool PollData(BLEData* data, bool block);
 
 	__declspec(dllexport) bool SendData(BLEData* data, bool block);
+
+	__declspec(dllexport) void Disconnect(wchar_t* deviceId);
 
 	__declspec(dllexport) void Quit();
 

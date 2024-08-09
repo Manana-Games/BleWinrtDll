@@ -382,6 +382,48 @@ ScanStatus PollService(Service* service, bool block) {
 	return res;
 }
 
+
+fire_and_forget ReadDataAsync(wchar_t* deviceId, wchar_t* serviceId, wchar_t* characteristicId) {
+	{
+		lock_guard lock(dataQueueLock);
+	}
+	try {
+		auto characteristic = co_await retrieveCharacteristic(deviceId, serviceId, characteristicId);
+		GattReadResult result = co_await characteristic.ReadValueAsync();
+		if (result.Status() == GattCommunicationStatus::Success) {
+			auto dataReader = DataReader::FromBuffer(result.Value());
+			auto output = dataReader.ReadString(dataReader.UnconsumedBufferLength());
+
+			BLEData data;
+			wcscpy_s(data.characteristicUuid, sizeof(data.characteristicUuid) / sizeof(wchar_t), to_hstring(characteristic.Uuid()).c_str());
+			wcscpy_s(data.serviceUuid, sizeof(data.serviceUuid) / sizeof(wchar_t), to_hstring(characteristic.Service().Uuid()).c_str());
+			wcscpy_s(data.deviceId, sizeof(data.deviceId) / sizeof(wchar_t), characteristic.Service().Device().DeviceId().c_str());
+
+			data.size = output.size();
+			memcpy(data.buf, output.data(), data.size);
+			{
+				lock_guard queueGuard(dataQueueLock);
+				dataQueue.push(data);
+				dataQueueSignal.notify_one();
+			}
+		
+		}
+		else
+		{
+			saveError(L"%s:%d ReadDataAsync Error when trying to read data %s", __WFILE__, __LINE__, result.ProtocolError());
+		}
+	}
+	catch (hresult_error& ex)
+	{
+		saveError(L"%s:%d ReadDataAsync catch: %s", __WFILE__, __LINE__, ex.message().c_str());
+	}
+}
+
+void ReadData(wchar_t* deviceId, wchar_t* serviceId, wchar_t* characteristicId)
+{
+	ReadDataAsync(deviceId, serviceId, characteristicId);
+}
+
 fire_and_forget ScanCharacteristicsAsync(wchar_t* deviceId, wchar_t* serviceId) {
 	{
 		lock_guard lock(characteristicQueueLock);
@@ -396,23 +438,24 @@ fire_and_forget ScanCharacteristicsAsync(wchar_t* deviceId, wchar_t* serviceId) 
 				// Handle different GattCommunicationStatus values
 				switch (charScan.Status())
 				{
-				case GattCommunicationStatus::AccessDenied:
-					saveError(L"%s:%d Access denied while scanning characteristics from service %s. Status code: %d", __WFILE__, __LINE__, serviceId, (int)charScan.Status());
-					break;
+					case GattCommunicationStatus::AccessDenied:
+						saveError(L"%s:%d Access denied while scanning characteristics from service %s. Status code: %d", __WFILE__, __LINE__, serviceId, (int)charScan.Status());
+						break;
 
-				case GattCommunicationStatus::ProtocolError:
-					saveError(L"%s:%d Protocol error while scanning characteristics from service %s. Status code: %d", __WFILE__, __LINE__, serviceId, (int)charScan.Status());
-					break;
+					case GattCommunicationStatus::ProtocolError:
+						saveError(L"%s:%d Protocol error while scanning characteristics from service %s. Status code: %d", __WFILE__, __LINE__, serviceId, (int)charScan.Status());
+						break;
 
 
-				case GattCommunicationStatus::Unreachable:
-					saveError(L"%s:%d Device unreachable while scanning characteristics from service %s. Status code: %d", __WFILE__, __LINE__, serviceId, (int)charScan.Status());
-					break;
+					case GattCommunicationStatus::Unreachable:
+						saveError(L"%s:%d Device unreachable while scanning characteristics from service %s. Status code: %d", __WFILE__, __LINE__, serviceId, (int)charScan.Status());
+						break;
 
-				default:
-					saveError(L"%s:%d Unknown error %d while scanning characteristics from service %s", __WFILE__, __LINE__, (int)charScan.Status(), serviceId);
-					break;
+					default:
+						saveError(L"%s:%d Unknown error %d while scanning characteristics from service %s", __WFILE__, __LINE__, (int)charScan.Status(), serviceId);
+						break;
 				}
+				quitFlag = true;
 			}
 			else {
 				for (auto c : charScan.Characteristics())
@@ -446,6 +489,7 @@ fire_and_forget ScanCharacteristicsAsync(wchar_t* deviceId, wchar_t* serviceId) 
 								saveError(L"%s:%d Unknown error %d while reading user description for characteristic %s", __WFILE__, __LINE__, (int)nameResult.Status(), to_hstring(c.Uuid()).c_str());
 								break;
 							}
+							quitFlag = true;
 						}
 
 						else {
@@ -603,6 +647,19 @@ bool SendData(BLEData* data, bool block) {
 		signal.wait(lock);
 
 	return result;
+}
+
+void Disconnect(wchar_t* deviceId) {
+	for (auto device : cache) {
+		if (hsh(deviceId) == device.first) {
+			device.second.device.Close();
+			for (auto service : device.second.services) {
+				service.second.service.Close();
+			}
+			cache.erase(hsh(deviceId));
+			return;
+		}
+	}
 }
 
 void Quit() {

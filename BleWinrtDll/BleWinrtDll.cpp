@@ -828,6 +828,8 @@ bool SendData(BLEData* data, bool block) {
 }
 
 void Quit() {
+
+    DebugLog("Cleaning up and shutting down...");
     {
         lock_guard<mutex> lock(quitLock);
         quitFlag = true;
@@ -863,7 +865,7 @@ void Quit() {
         }
     }
 
-    DebugLog("Cleaning up and shutting down...");
+   
 
     // Stop and clean up the DeviceWatcher if it's running
     if (deviceWatcher != nullptr)

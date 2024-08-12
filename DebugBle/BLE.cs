@@ -21,7 +21,9 @@ public class BLE
             public bool isConnectable;
             [MarshalAs(UnmanagedType.I1)]
             public bool isConnectableUpdated;
-            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 50)]
+			[MarshalAs(UnmanagedType.I1)]
+			public bool isConnected;
+			[MarshalAs(UnmanagedType.ByValTStr, SizeConst = 50)]
             public string name;
             [MarshalAs(UnmanagedType.I1)]
             public bool nameUpdated;
@@ -137,7 +139,7 @@ public class BLE
             List<string> deviceIds = new List<string>();
             Dictionary<string, string> deviceName = new Dictionary<string, string>();
             Dictionary<string, bool> deviceIsConnectable = new Dictionary<string, bool>();
-            Impl.ScanStatus status;
+
             while (Impl.PollDevice(out res, true) != Impl.ScanStatus.FINISHED)
             {
                 if (!deviceIds.Contains(res.id))
@@ -149,7 +151,7 @@ public class BLE
                 if (res.nameUpdated)
                     deviceName[res.id] = res.name;
                 if (res.isConnectableUpdated)
-                    deviceIsConnectable[res.id] = res.isConnectable;
+                    deviceIsConnectable[res.id] = res.isConnectable || res.isConnectable;
                 // connectable device
                 if (deviceName[res.id] != "" && deviceIsConnectable[res.id] == true)
                     currentScan.Found?.Invoke(res.id, deviceName[res.id]);

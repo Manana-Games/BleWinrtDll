@@ -1,12 +1,14 @@
 #pragma once
 
 #include "stdafx.h"
+#include <mutex>
+#include <shared_mutex>
 
 struct DeviceUpdate {
 	wchar_t id[100];
 	bool isConnectable = false;
-	bool isConnected = false;
 	bool isConnectableUpdated = false;
+	bool isConnected = false;
 	wchar_t name[50];
 	bool nameUpdated = false;
 };
@@ -32,7 +34,7 @@ struct ErrorMessage {
 	wchar_t msg[1024];
 };
 
-enum class ScanStatus { PROCESSING, AVAILABLE, FINISHED };
+enum class ScanStatus { PROCESSING, AVAILABLE, FINISHED, FAILED };
 
 extern "C" {
 
@@ -56,7 +58,11 @@ extern "C" {
 
 	__declspec(dllexport) bool SendData(BLEData* data, bool block);
 
+	//__declspec(dllexport) void Disconnect(wchar_t* deviceId);
+
 	__declspec(dllexport) void Quit();
 
 	__declspec(dllexport) void GetError(ErrorMessage* buf);
+
+	__declspec(dllexport) void SetDebugLogCallback(void (*func)(const char*));
 }

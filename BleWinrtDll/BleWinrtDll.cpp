@@ -827,6 +827,106 @@ bool SendData(BLEData* data, bool block) {
     return result;
 }
 
+
+
+fire_and_forget ReadCharacteristicDataAsync(wchar_t* deviceId, wchar_t* serviceId, wchar_t* characteristicId, bool* result, bool block) {
+    try {
+        DebugLog("Started ReadCharacteristicData...");
+
+        auto characteristic = co_await retrieveCharacteristic(deviceId, serviceId, characteristicId);
+        if (characteristic == nullptr) {
+            DebugLog("Failed to retrieve characteristic for data read.");
+            if (result != nullptr) {
+                *result = false;
+            }
+            co_return;
+        }
+
+        // Read the characteristic value
+        auto readResult = co_await characteristic.ReadValueAsync();
+        if (readResult.Status() != GattCommunicationStatus::Success) {
+            std::string message = "Error reading characteristic data with UUID: " + ConvertHStringToString(winrt::to_hstring(characteristic.Uuid())) + ", Status: " + std::to_string(static_cast<int>(readResult.Status()));
+            DebugLog(message.c_str());
+            if (result != nullptr) {
+                *result = false;
+            }
+        }
+        else {
+            // Process the data
+            auto buffer = readResult.Value();
+            BLEData bleData;
+            bleData.size = buffer.Length();
+            memcpy(bleData.buf, buffer.data(), bleData.size);
+
+            // Populate the BLEData with device, service, and characteristic IDs
+            wcscpy_s(bleData.deviceId, sizeof(bleData.deviceId) / sizeof(wchar_t), deviceId);
+            wcscpy_s(bleData.serviceUuid, sizeof(bleData.serviceUuid) / sizeof(wchar_t), serviceId);
+            wcscpy_s(bleData.characteristicUuid, sizeof(bleData.characteristicUuid) / sizeof(wchar_t), characteristicId);
+
+            // Lock the queue and add data, with queue size management
+            {
+                lock_guard<mutex> lock(dataQueueLock);
+                if (dataQueue.size() > 1000) { // Limit queue size to 1000 entries, adjust as needed
+                    DebugLog("Data queue full, dropping oldest data.");
+                    dataQueue.pop(); // Drop oldest data if queue is full
+                }
+                dataQueue.push(bleData);
+                DebugLog("Data enqueued into dataQueue.");
+                dataQueueSignal.notify_one();
+            }
+
+            std::string dataMessage = "Data received: Size = " + std::to_string(bleData.size);
+            DebugLog(dataMessage.c_str());
+
+            if (result != nullptr) {
+                *result = true;
+            }
+        }
+    }
+    catch (const std::exception& ex) {
+        std::string error_message = "Error during ReadCharacteristicDataAsync: " + std::string(ex.what());
+        DebugLog(error_message.c_str());
+        if (result != nullptr) {
+            *result = false;
+        }
+    }
+    catch (...) {
+        DebugLog("Unknown error occurred during ReadCharacteristicDataAsync.");
+        if (result != nullptr) {
+            *result = false;
+        }
+    }
+
+    if (result != nullptr) {
+        if (block) {
+            dataQueueSignal.notify_one();
+        }
+    }
+
+    DebugLog("ReadCharacteristicData completed.");
+}
+
+bool ReadCharacteristicData(wchar_t* deviceId, wchar_t* serviceId, wchar_t* characteristicId, bool block) {
+    bool result = false;
+
+    {
+        unique_lock<mutex> lock(dataQueueLock);
+        ReadCharacteristicDataAsync(deviceId, serviceId, characteristicId, block ? &result : nullptr, block);
+
+        if (block) {
+            dataQueueSignal.wait(lock); // Wait for data to be enqueued
+        }
+    }
+
+    std::string message = "ReadCharacteristicData from characteristic " + ConvertHStringToString(winrt::to_hstring(characteristicId)) + " was " + (result ? "successful" : "unsuccessful");
+    DebugLog(message.c_str());
+
+    return result;
+}
+
+
+
+
 void Quit() {
 
     DebugLog("Cleaning up and shutting down...");

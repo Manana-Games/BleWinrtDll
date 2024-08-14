@@ -4,6 +4,20 @@
 #include <mutex>
 #include <shared_mutex>
 
+enum class ConnectionStatus
+{
+	IDLE, // Default state, no connection attempt has been made yet
+	CONNECTED, // Connection was successful
+	DISCONNECTED, // Device was connected but is now disconnected
+	TIMEOUT,  // Connection attempt timed out
+	FAILED, // Connection attempt failed due to known reasons
+	UNKNOWN_ERROR // Connection attempt failed due to unknown/unexpected reasons
+};
+
+
+// Typedef for the callback function to notify Unity
+typedef void (*ConnectionStatusCallback)(ConnectionStatus status);
+
 struct DeviceUpdate {
 	wchar_t id[100];
 	bool isConnectable = false;
@@ -36,6 +50,8 @@ struct ErrorMessage {
 
 enum class ScanStatus { PROCESSING, AVAILABLE, FINISHED, FAILED };
 
+
+
 extern "C" {
 
 	__declspec(dllexport) void StartDeviceScan();
@@ -51,6 +67,8 @@ extern "C" {
 	__declspec(dllexport) void ScanCharacteristics(wchar_t* deviceId, wchar_t* serviceId);
 
 	__declspec(dllexport) ScanStatus PollCharacteristic(Characteristic* characteristic, bool block);
+
+	__declspec(dllexport) bool ConnectDevice(wchar_t* deviceId, bool block, ConnectionStatusCallback callback);
 
 	__declspec(dllexport) bool SubscribeCharacteristic(wchar_t* deviceId, wchar_t* serviceId, wchar_t* characteristicId, bool block);
 

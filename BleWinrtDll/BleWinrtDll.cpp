@@ -6,6 +6,8 @@
 #include <shared_mutex>
 #include <mutex>
 #include <iostream>
+#include <future>
+#include <chrono>
 
 #pragma comment(lib, "windowsapp")
 
@@ -22,6 +24,8 @@ using namespace Windows::Storage::Streams;
 
 // Pointer to the callback function in Unity
 void (*DebugLogCallback)(const char*) = nullptr;
+
+
 
 void SetDebugLogCallback(void (*func)(const char*))
 {
@@ -611,6 +615,129 @@ ScanStatus PollCharacteristic(Characteristic* characteristic, bool block)
         return ScanStatus::FAILED;
     }
 }
+
+fire_and_forget ConnectDeviceAsync(wchar_t* deviceId, bool* result, condition_variable* signal, ConnectionStatusCallback callback)
+{
+    try
+    {
+        DebugLog("Attempting to connect to the device...");
+
+        // Create a task for the connection attempt
+        auto connectTask = BluetoothLEDevice::FromIdAsync(deviceId);
+
+        // Timeout handling using a separate thread
+        bool timeoutOccurred = false;
+        std::future<void> timeoutFuture = std::async(std::launch::async, [&timeoutOccurred]()
+            {
+                std::this_thread::sleep_for(std::chrono::seconds(15));
+                timeoutOccurred = true;
+            });
+
+        // Wait for either the connection task to complete or the timeout to occur
+        while (connectTask.Status() == winrt::Windows::Foundation::AsyncStatus::Started)
+        {
+            if (timeoutOccurred)
+            {
+                DebugLog("Connection attempt timed out.");
+                if (callback)
+                {
+                    callback(ConnectionStatus::TIMEOUT);
+                }
+                if (result != nullptr)
+                {
+                    *result = false;
+                }
+                co_return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100)); // Check every 100ms
+        }
+
+        auto bluetoothLeDevice = co_await connectTask;
+
+        if (bluetoothLeDevice == nullptr)
+        {
+            DebugLog("Failed to retrieve BluetoothLEDevice.");
+            if (callback)
+            {
+                callback(ConnectionStatus::FAILED);
+            }
+            if (result != nullptr)
+            {
+                *result = false;
+            }
+        }
+        else
+        {
+            DebugLog("Device connected successfully.");
+            if (callback)
+            {
+                callback(ConnectionStatus::CONNECTED);
+            }
+            if (result != nullptr)
+            {
+                *result = true;
+            }
+
+            // Monitor the connection status
+            bluetoothLeDevice.ConnectionStatusChanged([callback](BluetoothLEDevice const& sender, IInspectable const&)
+                {
+                    if (sender.ConnectionStatus() == BluetoothConnectionStatus::Disconnected)
+                    {
+                        DebugLog("Device disconnected.");
+                        if (callback)
+                        {
+                            callback(ConnectionStatus::DISCONNECTED);
+                        }
+                    }
+                });
+        }
+    }
+    catch (const std::exception& ex)
+    {
+        std::string error_message = "Error during ConnectDeviceAsync: " + std::string(ex.what());
+        DebugLog(error_message.c_str());
+        if (callback)
+        {
+            callback(ConnectionStatus::UNKNOWN_ERROR);
+        }
+        if (result != nullptr)
+        {
+            *result = false;
+        }
+    }
+
+    DebugLog("Connection attempt finished.");
+
+    // Notify Unity if blocking was requested
+    if (signal != nullptr)
+    {
+        signal->notify_one();
+    }
+}
+
+
+
+
+bool ConnectDevice(wchar_t* deviceId, bool block, ConnectionStatusCallback callback)
+{
+    bool result = false;
+    condition_variable signal;
+
+    {
+        unique_lock<mutex> lock(quitLock); // Reuse the existing quitLock mutex for this operation
+        ConnectDeviceAsync(deviceId, block ? &result : nullptr, block ? &signal : nullptr, callback);
+
+        if (block)
+        {
+            signal.wait(lock); // Wait for the connection attempt to complete
+        }
+    }
+
+    DebugLog(result ? "Device connected successfully." : "Failed to connect the device.");
+    return result;
+}
+
+
 
 fire_and_forget SubscribeCharacteristicAsync(const wchar_t* deviceId, const wchar_t* serviceId, const wchar_t* characteristicId, bool* result)
 {

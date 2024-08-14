@@ -615,7 +615,7 @@ ScanStatus PollCharacteristic(Characteristic* characteristic, bool block)
         return ScanStatus::FAILED;
     }
 }
-
+BluetoothLEDevice bluetoothLeDevice = nullptr;
 fire_and_forget ConnectDeviceAsync(wchar_t* deviceId, bool* result, condition_variable* signal, ConnectionStatusCallback callback)
 {
     try
@@ -652,7 +652,7 @@ fire_and_forget ConnectDeviceAsync(wchar_t* deviceId, bool* result, condition_va
             std::this_thread::sleep_for(std::chrono::milliseconds(100)); // Check every 100ms
         }
 
-        auto bluetoothLeDevice = co_await connectTask;
+        bluetoothLeDevice = co_await connectTask;
 
         if (bluetoothLeDevice == nullptr)
         {
@@ -1103,8 +1103,13 @@ void Quit() {
     }
 
 
-    // Optionally, perform any additional resource cleanup here
-
+    // Clean up connection-related resources
+    if (bluetoothLeDevice != nullptr)
+    {
+        DebugLog("Closing active BluetoothLEDevice connection...");
+        bluetoothLeDevice.Close();
+        bluetoothLeDevice = nullptr;
+    }
    
 
     serviceQueueSignal.notify_one();

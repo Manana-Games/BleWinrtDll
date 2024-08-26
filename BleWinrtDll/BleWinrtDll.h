@@ -16,7 +16,7 @@ enum class ConnectionStatus
 
 
 // Typedef for the callback function to notify Unity
-typedef void (*ConnectionStatusCallback)(ConnectionStatus status);
+//typedef void (*ConnectionStatusCallback)(ConnectionStatus status);
 
 struct DeviceUpdate {
 	wchar_t id[100];
@@ -43,12 +43,15 @@ struct BLEData {
 	wchar_t serviceUuid[256];
 	wchar_t characteristicUuid[256];
 };
-
-struct ErrorMessage {
-	wchar_t msg[1024];
+enum class LogType { STANDARD, WARNING, EXCEPTION };
+struct LogMessage {
+	LogType logType;
+	wchar_t message[1024];
 };
 
 enum class ScanStatus { PROCESSING, AVAILABLE, FINISHED, FAILED };
+
+
 
 
 
@@ -68,7 +71,7 @@ extern "C" {
 
 	__declspec(dllexport) ScanStatus PollCharacteristic(Characteristic* characteristic, bool block);
 
-	__declspec(dllexport) bool ConnectDevice(wchar_t* deviceId, bool block, ConnectionStatusCallback callback);
+	//__declspec(dllexport) bool ConnectDevice(wchar_t* deviceId, bool block, ConnectionStatusCallback callback);
 
 	__declspec(dllexport) bool SubscribeCharacteristic(wchar_t* deviceId, wchar_t* serviceId, wchar_t* characteristicId, bool block);
 
@@ -83,7 +86,5 @@ extern "C" {
 
 	__declspec(dllexport) void Quit();
 
-	__declspec(dllexport) void GetError(ErrorMessage* buf);
-
-	__declspec(dllexport) void SetDebugLogCallback(void (*func)(const char*));
+	__declspec(dllexport) bool DequeueLogMessage(LogMessage* outMessage);
 }

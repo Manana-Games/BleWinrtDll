@@ -8,6 +8,9 @@
 #include <iostream>
 #include <future>
 #include <chrono>
+#include <Windows.h>
+#include <vector>
+#include <sstream>
 
 #pragma comment(lib, "windowsapp")
 
@@ -22,23 +25,63 @@ using namespace Windows::Devices::Bluetooth::GenericAttributeProfile;
 using namespace Windows::Devices::Enumeration;
 using namespace Windows::Storage::Streams;
 
-// Pointer to the callback function in Unity
-void (*DebugLogCallback)(const char*) = nullptr;
+
+std::chrono::milliseconds timeout = std::chrono::milliseconds(30000);
+
+#pragma region LOGGING
 
 
+std::queue<LogMessage> logQueue;
+std::mutex logMutex;
 
-void SetDebugLogCallback(void (*func)(const char*))
-{
-    DebugLogCallback = func;
+template<typename... Args>
+std::string MakeLogMessage(const char* function, const char* prefix, Args&&... args) {
+    std::ostringstream oss;
+    oss << "BleWinRTDll: " << function << ": " << prefix;
+    ((oss << std::forward<Args>(args)), ...);
+    return oss.str();
 }
 
-void DebugLog(const char* message)
-{
-    if (DebugLogCallback)
-    {
-        DebugLogCallback(message);
+#define LOG(message) EnqueueLogMessage(LogType::STANDARD, MakeLogMessage(__FUNCTION__, message).c_str())
+#define LOG_WARNING(message) EnqueueLogMessage(LogType::WARNING, MakeLogMessage(__FUNCTION__, "Warning: ", message).c_str())
+#define LOG_ERROR(message) EnqueueLogMessage(LogType::EXCEPTION, MakeLogMessage(__FUNCTION__"Error: ", message).c_str())
+
+void EnqueueLogMessage(LogType logType, const char* message) {
+    try {
+        std::lock_guard<std::mutex> lock(logMutex);
+        LogMessage logMsg;
+        logMsg.logType = logType;
+
+        // Convert char* to wchar_t*
+        int wideSize = MultiByteToWideChar(CP_UTF8, 0, message, -1, NULL, 0);
+        if (wideSize > 0) {
+            std::vector<wchar_t> wideMessage(wideSize);
+            MultiByteToWideChar(CP_UTF8, 0, message, -1, wideMessage.data(), wideSize);
+            wcsncpy_s(logMsg.message, wideMessage.data(), std::size(logMsg.message) - 1);
+            logMsg.message[std::size(logMsg.message) - 1] = L'\0';
+        }
+        logQueue.push(logMsg);
     }
+    catch (...) {
+        // Handle exception
+    }
+   
 }
+
+bool DequeueLogMessage(LogMessage* outMessage) {
+    std::lock_guard<std::mutex> lock(logMutex);
+    if (logQueue.empty()) {
+        return false;
+    }
+    *outMessage = logQueue.front();
+    logQueue.pop();
+    return true;
+}
+
+
+#pragma endregion
+
+
 
 // Helper function to convert winrt::hstring to std::string
 std::string ConvertHStringToString(const winrt::hstring& hstr)
@@ -290,7 +333,7 @@ void StartDeviceScan()
 {
     try
     {
-        DebugLog("Starting device scan...");
+        LOG("Starting device scan...");
         deviceScanFinished = false;
         deviceScanError = false;
         deviceQueue = {};  // Clear the queue
@@ -306,7 +349,7 @@ void StartDeviceScan()
 
         if (!deviceWatcher)
         {
-            DebugLog("Failed to create DeviceWatcher.");
+            LOG("Failed to create DeviceWatcher.");
             deviceScanError = true;
             return;
         }
@@ -314,7 +357,7 @@ void StartDeviceScan()
         deviceWatcher.Added([&](DeviceWatcher sender, DeviceInformation deviceInfo)
             {
                 lock_guard<mutex> lock(deviceQueueLock);
-                DebugLog("Device found...");
+                LOG("Device found...");
 
                 DeviceUpdate deviceUpdate;
                 wcscpy_s(deviceUpdate.id, deviceInfo.Id().c_str());
@@ -337,17 +380,16 @@ void StartDeviceScan()
         deviceWatcher.EnumerationCompleted([&](DeviceWatcher sender, IInspectable const&)
             {
                 lock_guard<mutex> lock(deviceQueueLock);
-                DebugLog("Device enumeration completed.");
+                LOG("Device enumeration completed.");
                 deviceScanFinished = true;
             });
 
-        DebugLog("Starting device watcher...");
+        LOG("Starting device watcher...");
         deviceWatcher.Start();
     }
     catch (const std::exception& e)
     {
-        DebugLog("Error during StartDeviceScan:");
-        DebugLog(e.what());
+        LOG_ERROR("Error during StartDeviceScan: ", e.what());
         deviceScanError = true; // Mark that an error occurred
     }
 }
@@ -356,12 +398,12 @@ ScanStatus PollDevice(DeviceUpdate* device, bool block)
 {
     try
     {
-        DebugLog("Polling device...");
+        LOG("Polling device...");
         lock_guard<mutex> lock(deviceQueueLock);
 
         if (deviceScanError)
         {
-            DebugLog("Polling failed: Device scan error detected.");
+            LOG_ERROR("Polling failed: Device scan error detected.");
             return ScanStatus::FAILED;
         }
 
@@ -371,24 +413,24 @@ ScanStatus PollDevice(DeviceUpdate* device, bool block)
             deviceQueue.pop();
 
             std::string message = "Device available: ID = " + ConvertHStringToString(device->id) + ", Name = " + ConvertHStringToString(device->name);
-            DebugLog(message.c_str());
+            LOG(message.c_str());
 
             return ScanStatus::AVAILABLE;
         }
 
         if (deviceScanFinished)
         {
-            DebugLog("Polling completed: No more devices, scan finished.");
+            LOG("Polling completed: No more devices, scan finished.");
             return ScanStatus::FINISHED;
         }
 
-        DebugLog("Polling in progress: No devices available yet.");
+        LOG("Polling in progress: No devices available yet.");
         return ScanStatus::PROCESSING;
     }
     catch (const std::exception& e)
     {
         std::string error_message = "Error during PollDevice: " + std::string(e.what());
-        DebugLog(error_message.c_str());
+        LOG_ERROR(error_message.c_str());
         return ScanStatus::FAILED; // Return FAILED status if an exception occurs
     }
 }
@@ -404,7 +446,7 @@ fire_and_forget ScanServicesAsync(const wchar_t* deviceId)
 {
     try
     {
-        DebugLog("Starting service scan...");
+        LOG("Starting service scan...");
         serviceScanFinished = false;
         serviceScanError = false;
         serviceQueue = {}; // Clear the queue
@@ -413,7 +455,7 @@ fire_and_forget ScanServicesAsync(const wchar_t* deviceId)
 
         if (bluetoothLeDevice == nullptr)
         {
-            DebugLog("Failed to connect to device.");
+            LOG_ERROR("Failed to connect to device.");
             serviceScanError = true;
             co_return;
         }
@@ -429,7 +471,7 @@ fire_and_forget ScanServicesAsync(const wchar_t* deviceId)
                 wcscpy_s(serviceStruct.uuid, sizeof(serviceStruct.uuid) / sizeof(wchar_t), uuidWString.c_str());
 
                 std::string message = "Service found: UUID = " + ConvertHStringToString(serviceStruct.uuid);
-                DebugLog(message.c_str());
+                LOG(message.c_str());
 
                 lock_guard<mutex> lock(serviceQueueLock);
                 serviceQueue.push(serviceStruct);
@@ -437,14 +479,14 @@ fire_and_forget ScanServicesAsync(const wchar_t* deviceId)
         }
         else
         {
-            DebugLog("Failed to retrieve GATT services.");
+            LOG_ERROR("Failed to retrieve GATT services.");
             serviceScanError = true;
         }
     }
     catch (const std::exception& ex)
     {
         std::string error_message = "Error during ScanServicesAsync: " + std::string(ex.what());
-        DebugLog(error_message.c_str());
+        LOG_ERROR(error_message.c_str());
         serviceScanError = true;
     }
 
@@ -461,13 +503,13 @@ ScanStatus PollService(Service* service, bool block)
 {
     try
     {
-        DebugLog("Polling for service...");
+        LOG("Polling for service...");
 
         lock_guard<mutex> lock(serviceQueueLock);
 
         if (serviceScanError)
         {
-            DebugLog("Service scan error detected.");
+            LOG_ERROR("Service scan error detected.");
             return ScanStatus::FAILED;
         }
 
@@ -477,43 +519,44 @@ ScanStatus PollService(Service* service, bool block)
             serviceQueue.pop();
 
             std::string message = "Service available: UUID = " + ConvertHStringToString(service->uuid);
-            DebugLog(message.c_str());
+            LOG(message.c_str());
 
             return ScanStatus::AVAILABLE;
         }
 
         if (serviceScanFinished)
         {
-            DebugLog("Service scan finished.");
+            LOG("Service scan finished.");
             return ScanStatus::FINISHED;
         }
 
-        DebugLog("Service scan still processing.");
+        LOG("Service scan still processing.");
         return ScanStatus::PROCESSING;
     }
     catch (const std::exception& ex)
     {
         std::string error_message = "Error during PollService: " + std::string(ex.what());
-        DebugLog(error_message.c_str());
+        LOG_ERROR(error_message.c_str());
         return ScanStatus::FAILED;
     }
 }
 
-// Function to scan characteristics asynchronously
 fire_and_forget ScanCharacteristicsAsync(wchar_t* deviceId, wchar_t* serviceId)
 {
     try
     {
-        DebugLog("Starting characteristic scan...");
+        LOG("Starting characteristic scan...");
         characteristicScanFinished = false;
         characteristicScanError = false;
-        characteristicQueue = {}; // Clear the queue
-
+        {
+            lock_guard<mutex> lock(characteristicQueueLock);
+            characteristicQueue = {}; // Clear the queue
+        }
         auto service = co_await retrieveService(deviceId, serviceId);
 
         if (service == nullptr)
         {
-            DebugLog("Failed to retrieve service.");
+            LOG_ERROR("Failed to retrieve service.");
             characteristicScanError = true;
             co_return;
         }
@@ -522,7 +565,7 @@ fire_and_forget ScanCharacteristicsAsync(wchar_t* deviceId, wchar_t* serviceId)
 
         if (result.Status() == GattCommunicationStatus::Success)
         {
-            DebugLog("Characteristic scan successful, processing characteristics...");
+            LOG("Characteristic scan successful, processing characteristics...");
             for (auto&& characteristic : result.Characteristics())
             {
                 Characteristic charStruct;
@@ -541,12 +584,17 @@ fire_and_forget ScanCharacteristicsAsync(wchar_t* deviceId, wchar_t* serviceId)
                 }
 
                 std::string message = "Characteristic found: UUID = " + ConvertHStringToString(winrt::to_hstring(characteristic.Uuid())) + ", Description = " + ConvertHStringToString(winrt::to_hstring(charStruct.userDescription));
-                DebugLog(message.c_str());
+                LOG(message.c_str());
 
                 {
                     lock_guard<mutex> lock(characteristicQueueLock);
                     characteristicQueue.push(charStruct);
+
+                    std::string message = "Characteristic added to queue: UUID = " + ConvertHStringToString(winrt::to_hstring(characteristic.Uuid()));
+                    LOG(message.c_str());
                 }
+
+
 
                 // Add a slight delay if needed to avoid tight loops
                 co_await resume_background(); // This can yield to other operations if necessary
@@ -554,20 +602,20 @@ fire_and_forget ScanCharacteristicsAsync(wchar_t* deviceId, wchar_t* serviceId)
         }
         else
         {
-            DebugLog("Failed to retrieve characteristics.");
+            LOG_ERROR("Failed to retrieve characteristics.");
             characteristicScanError = true;
         }
     }
     catch (const std::exception& ex)
     {
         std::string error_message = "Error during ScanCharacteristicsAsync: " + std::string(ex.what());
-        DebugLog(error_message.c_str());
+        LOG_ERROR(error_message.c_str());
         characteristicScanError = true;
     }
 
     lock_guard<mutex> lock(characteristicQueueLock);
     characteristicScanFinished = true;
-    DebugLog("Characteristic scan completed.");
+    LOG("Characteristic scan completed.");
 }
 
 void ScanCharacteristics(wchar_t* deviceId, wchar_t* serviceId) {
@@ -578,49 +626,63 @@ ScanStatus PollCharacteristic(Characteristic* characteristic, bool block)
 {
     try
     {
-        DebugLog("Polling for characteristic...");
+        LOG("Polling for characteristic...");
 
-        lock_guard<mutex> lock(characteristicQueueLock);
+        auto start_time = std::chrono::steady_clock::now();
 
-        if (characteristicScanError)
+
+        while (block && std::chrono::steady_clock::now() - start_time < timeout)
         {
-            DebugLog("Characteristic scan error detected.");
-            return ScanStatus::FAILED;
+            {
+
+                lock_guard<mutex> lock(characteristicQueueLock);
+                if (characteristicScanError)
+                {
+                    LOG_ERROR("Characteristic scan error detected.");
+                    return ScanStatus::FAILED;
+                }
+
+                if (!characteristicQueue.empty())
+                {
+                    *characteristic = characteristicQueue.front();
+                    characteristicQueue.pop();
+
+                    std::string message = "Characteristic available: UUID = " + ConvertHStringToString(winrt::to_hstring(characteristic->uuid)) + ", Description = " + ConvertHStringToString(winrt::to_hstring(characteristic->userDescription));
+                    LOG(message.c_str());
+
+                    return ScanStatus::AVAILABLE;
+                }
+
+                if (characteristicScanFinished)
+                {
+                    LOG("Characteristic scan finished.");
+                    return ScanStatus::FINISHED;
+                }
+
+                LOG("Characteristic scan still processing.");
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100)); // Small sleep to avoid tight loops
         }
 
-        if (!characteristicQueue.empty())
-        {
-            *characteristic = characteristicQueue.front();
-            characteristicQueue.pop();
-
-            std::string message = "Characteristic available: UUID = " + ConvertHStringToString(winrt::to_hstring(characteristic->uuid)) + ", Description = " + ConvertHStringToString(winrt::to_hstring(characteristic->userDescription));
-            DebugLog(message.c_str());
-
-            return ScanStatus::AVAILABLE;
-        }
-
-        if (characteristicScanFinished)
-        {
-            DebugLog("Characteristic scan finished.");
-            return ScanStatus::FINISHED;
-        }
-
-        DebugLog("Characteristic scan still processing.");
-        return ScanStatus::PROCESSING;
+        LOG_ERROR("Polling for characteristic timed out.");
+        return ScanStatus::FAILED;
     }
     catch (const std::exception& ex)
     {
         std::string error_message = "Error during PollCharacteristic: " + std::string(ex.what());
-        DebugLog(error_message.c_str());
+        LOG_ERROR(error_message.c_str());
         return ScanStatus::FAILED;
     }
 }
+
+
 BluetoothLEDevice bluetoothLeDevice = nullptr;
+/*
 fire_and_forget ConnectDeviceAsync(wchar_t* deviceId, bool* result, condition_variable* signal, ConnectionStatusCallback callback)
 {
     try
     {
-        DebugLog("Attempting to connect to the device...");
+        LOG("Attempting to connect to the device...");
 
         // Create a task for the connection attempt
         auto connectTask = BluetoothLEDevice::FromIdAsync(deviceId);
@@ -638,7 +700,7 @@ fire_and_forget ConnectDeviceAsync(wchar_t* deviceId, bool* result, condition_va
         {
             if (timeoutOccurred)
             {
-                DebugLog("Connection attempt timed out.");
+                LOG_WARNING("Connection attempt timed out.");
                 if (callback)
                 {
                     callback(ConnectionStatus::TIMEOUT);
@@ -656,7 +718,7 @@ fire_and_forget ConnectDeviceAsync(wchar_t* deviceId, bool* result, condition_va
 
         if (bluetoothLeDevice == nullptr)
         {
-            DebugLog("Failed to retrieve BluetoothLEDevice.");
+            LOG_ERROR("Failed to retrieve BluetoothLEDevice.");
             if (callback)
             {
                 callback(ConnectionStatus::FAILED);
@@ -668,7 +730,7 @@ fire_and_forget ConnectDeviceAsync(wchar_t* deviceId, bool* result, condition_va
         }
         else
         {
-            DebugLog("Device connected successfully.");
+            LOG("Device connected successfully.");
             if (callback)
             {
                 callback(ConnectionStatus::CONNECTED);
@@ -683,7 +745,7 @@ fire_and_forget ConnectDeviceAsync(wchar_t* deviceId, bool* result, condition_va
                 {
                     if (sender.ConnectionStatus() == BluetoothConnectionStatus::Disconnected)
                     {
-                        DebugLog("Device disconnected.");
+                        LOG_WARNING("Device disconnected.");
                         if (callback)
                         {
                             callback(ConnectionStatus::DISCONNECTED);
@@ -695,7 +757,7 @@ fire_and_forget ConnectDeviceAsync(wchar_t* deviceId, bool* result, condition_va
     catch (const std::exception& ex)
     {
         std::string error_message = "Error during ConnectDeviceAsync: " + std::string(ex.what());
-        DebugLog(error_message.c_str());
+        LOG_ERROR(error_message.c_str());
         if (callback)
         {
             callback(ConnectionStatus::UNKNOWN_ERROR);
@@ -706,7 +768,7 @@ fire_and_forget ConnectDeviceAsync(wchar_t* deviceId, bool* result, condition_va
         }
     }
 
-    DebugLog("Connection attempt finished.");
+    LOG("Connection attempt finished.");
 
     // Notify Unity if blocking was requested
     if (signal != nullptr)
@@ -735,7 +797,7 @@ bool ConnectDevice(wchar_t* deviceId, bool block, ConnectionStatusCallback callb
 
     DebugLog(result ? "Device connected successfully." : "Failed to connect the device.");
     return result;
-}
+}*/
 
 
 
@@ -743,13 +805,13 @@ fire_and_forget SubscribeCharacteristicAsync(const wchar_t* deviceId, const wcha
 {
     try
     {
-        DebugLog("Starting characteristic subscription...");
+        LOG("Starting characteristic subscription...");
 
         auto characteristic = co_await retrieveCharacteristic(deviceId, serviceId, characteristicId);
 
         if (characteristic == nullptr)
         {
-            DebugLog("Failed to retrieve characteristic for subscription.");
+            LOG_ERROR("Failed to retrieve characteristic for subscription.");
             if (result != nullptr)
             {
                 *result = false;
@@ -757,14 +819,14 @@ fire_and_forget SubscribeCharacteristicAsync(const wchar_t* deviceId, const wcha
             co_return;
         }
 
-        DebugLog("Retrieved characteristic, attempting to subscribe...");
+        LOG("Retrieved characteristic, attempting to subscribe...");
 
         // Check if characteristic supports Notify or Indicate
         GattCharacteristicProperties properties = characteristic.CharacteristicProperties();
         if ((properties & GattCharacteristicProperties::Notify) == GattCharacteristicProperties::None &&
             (properties & GattCharacteristicProperties::Indicate) == GattCharacteristicProperties::None)
         {
-            DebugLog("Characteristic does not support Notify or Indicate. Subscription aborted.");
+            LOG_WARNING("Characteristic does not support Notify or Indicate. Subscription aborted.");
             if (result != nullptr)
             {
                 *result = false;
@@ -777,7 +839,7 @@ fire_and_forget SubscribeCharacteristicAsync(const wchar_t* deviceId, const wcha
         if (status != GattCommunicationStatus::Success)
         {
             std::string message = "Error subscribing to characteristic with UUID: " + ConvertHStringToString(winrt::to_hstring(characteristic.Uuid())) + ", Status: " + std::to_string(static_cast<int>(status));
-            DebugLog(message.c_str());
+            LOG_ERROR(message.c_str());
             if (result != nullptr)
             {
                 *result = false;
@@ -786,20 +848,20 @@ fire_and_forget SubscribeCharacteristicAsync(const wchar_t* deviceId, const wcha
         else
         {
             std::string message = "Successfully subscribed to characteristic with UUID: " + ConvertHStringToString(winrt::to_hstring(characteristic.Uuid()));
-            DebugLog(message.c_str());
+            LOG(message.c_str());
 
             auto subscription = new Subscription{ characteristic };
 
             subscription->revoker = characteristic.ValueChanged(auto_revoke, [deviceId, serviceId, characteristicId](GattCharacteristic const&, GattValueChangedEventArgs const& args)
                 {
                     try {
-                        DebugLog("ValueChanged event triggered.");
+                        LOG("ValueChanged event triggered.");
 
                         BLEData bleData;
                         bleData.size = args.CharacteristicValue().Length();
                         memcpy(bleData.buf, args.CharacteristicValue().data(), bleData.size);
 
-                        DebugLog("Data received from ValueChanged event, populating BLEData.");
+                        LOG("Data received from ValueChanged event, populating BLEData.");
 
                         // Populate the BLEData with device, service, and characteristic IDs
                         wcscpy_s(bleData.deviceId, sizeof(bleData.deviceId) / sizeof(wchar_t), deviceId);
@@ -809,17 +871,17 @@ fire_and_forget SubscribeCharacteristicAsync(const wchar_t* deviceId, const wcha
                         {
                             lock_guard<mutex> lock(dataQueueLock);
                             dataQueue.push(bleData);
-                            DebugLog("Data enqueued into dataQueue.");
+                            LOG("Data enqueued into dataQueue.");
                             dataQueueSignal.notify_one();
                         }
 
                         std::string dataMessage = "Data received: Size = " + std::to_string(bleData.size);
-                        DebugLog(dataMessage.c_str());
+                        LOG(dataMessage.c_str());
                     }
                     catch (const std::exception& ex)
                     {
                         std::string error_message = "Error during ValueChanged event handling: " + std::string(ex.what());
-                        DebugLog(error_message.c_str());
+                        LOG_ERROR(error_message.c_str());
                     }
                 });
 
@@ -837,14 +899,14 @@ fire_and_forget SubscribeCharacteristicAsync(const wchar_t* deviceId, const wcha
     catch (const std::exception& ex)
     {
         std::string error_message = "Error during SubscribeCharacteristicAsync: " + std::string(ex.what());
-        DebugLog(error_message.c_str());
+        LOG_ERROR(error_message.c_str());
         if (result != nullptr)
         {
             *result = false;
         }
     }
 
-    DebugLog("Characteristic subscription process completed.");
+    LOG("Characteristic subscription process completed.");
     if (result != nullptr)
     {
         subscribeQueueSignal.notify_one();
@@ -865,7 +927,7 @@ bool SubscribeCharacteristic(wchar_t* deviceId, wchar_t* serviceId, wchar_t* cha
     }
 
     std::string message = "Subscription to characteristic " + ConvertHStringToString(winrt::to_hstring(characteristicId)) + " was " + (result ? "successful" : "unsuccessful");
-    DebugLog(message.c_str());
+    LOG(message.c_str());
 
     return result;
 }
@@ -874,19 +936,19 @@ bool PollData(BLEData* data, bool block)
 {
     try
     {
-        DebugLog("Polling for BLE data...");
-        DebugLog("Attempting to acquire dataQueueLock...");
+        LOG("Polling for BLE data...");
+        LOG("Attempting to acquire dataQueueLock...");
         unique_lock<mutex> lock(dataQueueLock);
-        DebugLog("Successfully acquired dataQueueLock...");
+        LOG("Successfully acquired dataQueueLock...");
         if (block && dataQueue.empty())
         {
-            DebugLog("Data queue is empty, waiting for data...");
+            LOG("Data queue is empty, waiting for data...");
             dataQueueSignal.wait(lock);
         }
 
         if (!dataQueue.empty())
         {
-            DebugLog("Data found in queue, retrieving...");
+            LOG("Data found in queue, retrieving...");
             *data = dataQueue.front();
             dataQueue.pop();
 
@@ -894,23 +956,23 @@ bool PollData(BLEData* data, bool block)
                 ", Service UUID = " + ConvertHStringToString(data->serviceUuid) +
                 ", Characteristic UUID = " + ConvertHStringToString(data->characteristicUuid) +
                 ", Data Size = " + std::to_string(data->size);
-            DebugLog(message.c_str());
+            LOG(message.c_str());
 
             return true;
         }
 
-        DebugLog("No data available.");
+        LOG_WARNING("No data available.");
         return false;
     }
     catch (const std::exception& ex)
     {
         std::string error_message = "Error during PollData: " + std::string(ex.what());
-        DebugLog(error_message.c_str());
+        LOG_ERROR(error_message.c_str());
         return false;
     }
     catch (...)
     {
-        DebugLog("Unknown error occurred during PollData.");
+        LOG_ERROR("Unknown error occurred during PollData.");
         return false;
     }
 }
@@ -958,11 +1020,11 @@ bool SendData(BLEData* data, bool block) {
 
 fire_and_forget ReadCharacteristicDataAsync(wchar_t* deviceId, wchar_t* serviceId, wchar_t* characteristicId, bool* result, bool block) {
     try {
-        DebugLog("Started ReadCharacteristicData...");
+        LOG("Started ReadCharacteristicData...");
 
         auto characteristic = co_await retrieveCharacteristic(deviceId, serviceId, characteristicId);
         if (characteristic == nullptr) {
-            DebugLog("Failed to retrieve characteristic for data read.");
+            LOG_ERROR("Failed to retrieve characteristic for data read.");
             if (result != nullptr) {
                 *result = false;
             }
@@ -973,7 +1035,7 @@ fire_and_forget ReadCharacteristicDataAsync(wchar_t* deviceId, wchar_t* serviceI
         auto readResult = co_await characteristic.ReadValueAsync();
         if (readResult.Status() != GattCommunicationStatus::Success) {
             std::string message = "Error reading characteristic data with UUID: " + ConvertHStringToString(winrt::to_hstring(characteristic.Uuid())) + ", Status: " + std::to_string(static_cast<int>(readResult.Status()));
-            DebugLog(message.c_str());
+            LOG_ERROR(message.c_str());
             if (result != nullptr) {
                 *result = false;
             }
@@ -994,16 +1056,16 @@ fire_and_forget ReadCharacteristicDataAsync(wchar_t* deviceId, wchar_t* serviceI
             {
                 lock_guard<mutex> lock(dataQueueLock);
                 if (dataQueue.size() > 1000) { // Limit queue size to 1000 entries, adjust as needed
-                    DebugLog("Data queue full, dropping oldest data.");
+                    LOG_WARNING("Data queue full, dropping oldest data.");
                     dataQueue.pop(); // Drop oldest data if queue is full
                 }
                 dataQueue.push(bleData);
-                DebugLog("Data enqueued into dataQueue.");
+                LOG("Data enqueued into dataQueue.");
                 dataQueueSignal.notify_one();
             }
 
             std::string dataMessage = "Data received: Size = " + std::to_string(bleData.size);
-            DebugLog(dataMessage.c_str());
+            LOG(dataMessage.c_str());
 
             if (result != nullptr) {
                 *result = true;
@@ -1012,13 +1074,13 @@ fire_and_forget ReadCharacteristicDataAsync(wchar_t* deviceId, wchar_t* serviceI
     }
     catch (const std::exception& ex) {
         std::string error_message = "Error during ReadCharacteristicDataAsync: " + std::string(ex.what());
-        DebugLog(error_message.c_str());
+        LOG_ERROR(error_message.c_str());
         if (result != nullptr) {
             *result = false;
         }
     }
     catch (...) {
-        DebugLog("Unknown error occurred during ReadCharacteristicDataAsync.");
+        LOG_ERROR("Unknown error occurred during ReadCharacteristicDataAsync.");
         if (result != nullptr) {
             *result = false;
         }
@@ -1030,7 +1092,7 @@ fire_and_forget ReadCharacteristicDataAsync(wchar_t* deviceId, wchar_t* serviceI
         }
     }
 
-    DebugLog("ReadCharacteristicData completed.");
+    LOG("ReadCharacteristicData completed.");
 }
 
 bool ReadCharacteristicData(wchar_t* deviceId, wchar_t* serviceId, wchar_t* characteristicId, bool block) {
@@ -1046,7 +1108,7 @@ bool ReadCharacteristicData(wchar_t* deviceId, wchar_t* serviceId, wchar_t* char
     }
 
     std::string message = "ReadCharacteristicData from characteristic " + ConvertHStringToString(winrt::to_hstring(characteristicId)) + " was " + (result ? "successful" : "unsuccessful");
-    DebugLog(message.c_str());
+    LOG(message.c_str());
 
     return result;
 }
@@ -1056,7 +1118,7 @@ bool ReadCharacteristicData(wchar_t* deviceId, wchar_t* serviceId, wchar_t* char
 
 void Quit() {
 
-    DebugLog("Cleaning up and shutting down...");
+    LOG("Cleaning up and shutting down...");
     {
         lock_guard<mutex> lock(quitLock);
         quitFlag = true;
@@ -1097,7 +1159,7 @@ void Quit() {
     // Stop and clean up the DeviceWatcher if it's running
     if (deviceWatcher != nullptr)
     {
-        DebugLog("Stopping DeviceWatcher...");
+        LOG("Stopping DeviceWatcher...");
         deviceWatcher.Stop();
         deviceWatcher = nullptr;
     }
@@ -1106,7 +1168,7 @@ void Quit() {
     // Clean up connection-related resources
     if (bluetoothLeDevice != nullptr)
     {
-        DebugLog("Closing active BluetoothLEDevice connection...");
+        LOG("Closing active BluetoothLEDevice connection...");
         bluetoothLeDevice.Close();
         bluetoothLeDevice = nullptr;
     }
@@ -1148,11 +1210,7 @@ void Quit() {
         }
         cache.clear();
     }
-    DebugLog("Cleanup completed.");
+    LOG("Cleanup completed.");
 
 }
 
-void GetError(ErrorMessage* buf) {
-    lock_guard<mutex> lock(errorLock);
-    wcscpy_s(buf->msg, last_error);
-}

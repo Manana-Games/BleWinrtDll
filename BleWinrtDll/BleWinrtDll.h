@@ -6,12 +6,13 @@
 
 enum class ConnectionStatus
 {
-	IDLE, // Default state, no connection attempt has been made yet
-	CONNECTED, // Connection was successful
-	DISCONNECTED, // Device was connected but is now disconnected
-	TIMEOUT,  // Connection attempt timed out
-	FAILED, // Connection attempt failed due to known reasons
-	UNKNOWN_ERROR // Connection attempt failed due to unknown/unexpected reasons
+	Idle,// Default state, no connection attempt has been made yet
+	Connecting, //Connect attempt is currently running
+	Connected, // Connection was successful
+	Disconnected, // Device was connected but is now disconnected
+	Timeout,  // Connection attempt timed out
+	Failed, // Connection attempt failed due to known reasons
+	Unknown_Error // Connection attempt failed due to unknown/unexpected reasons
 };
 
 
@@ -26,6 +27,8 @@ struct DeviceUpdate {
 	wchar_t name[50];
 	bool nameUpdated = false;
 };
+
+
 
 struct Service {
 	wchar_t uuid[100];
@@ -43,13 +46,13 @@ struct BLEData {
 	wchar_t serviceUuid[256];
 	wchar_t characteristicUuid[256];
 };
-enum class LogType { STANDARD, WARNING, EXCEPTION };
+enum class LogLevel { Info, Warning, Error, Exception };
 struct LogMessage {
-	LogType logType;
+	LogLevel logLevel;
 	wchar_t message[1024];
 };
 
-enum class ScanStatus { PROCESSING, AVAILABLE, FINISHED, FAILED };
+enum class ScanStatus { Processing, Available, Finished, Failed };
 
 
 
@@ -71,7 +74,9 @@ extern "C" {
 
 	__declspec(dllexport) ScanStatus PollCharacteristic(Characteristic* characteristic, bool block);
 
-	//__declspec(dllexport) bool ConnectDevice(wchar_t* deviceId, bool block, ConnectionStatusCallback callback);
+	__declspec(dllexport) bool ConnectDevice(wchar_t* deviceId);
+	__declspec(dllexport) ConnectionStatus PollConnectionStatusForDevice(wchar_t* deviceId);
+	__declspec(dllexport) bool DisconnectDevice(wchar_t* deviceId);
 
 	__declspec(dllexport) bool SubscribeCharacteristic(wchar_t* deviceId, wchar_t* serviceId, wchar_t* characteristicId, bool block);
 
@@ -82,7 +87,7 @@ extern "C" {
 	__declspec(dllexport) bool SendData(BLEData* data, bool block);
 
 
-	//__declspec(dllexport) void Disconnect(wchar_t* deviceId);
+	__declspec(dllexport) void SetOutputLogLevel(LogLevel level);
 
 	__declspec(dllexport) void Quit();
 

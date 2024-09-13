@@ -173,6 +173,21 @@ bool isConnecting = false;
 map<long, DeviceCacheEntry> cache;
 std::shared_mutex cacheMutex;
 
+winrt::Windows::Devices::Enumeration::DeviceWatcher deviceWatcher{ nullptr };
+bool quitFlag = false;
+mutex quitLock;
+
+bool QuittableWait(condition_variable& signal, unique_lock<mutex>& waitLock) {
+    signal.wait(waitLock, [] { return quitFlag; });
+    return quitFlag;
+}
+
+bool IsQuitFlagSet()
+{
+    std::lock_guard<std::mutex> lock(quitLock);
+    return quitFlag;
+}
+
 long hsh(const wchar_t* wstr) {
     long hash = 5381;
     int c;
@@ -190,6 +205,11 @@ IAsyncOperation<BluetoothLEDevice> retrieveDevice(const wchar_t* deviceId) {
     }
 
     BluetoothLEDevice result = co_await BluetoothLEDevice::FromIdAsync(deviceId);
+    if (IsQuitFlagSet())
+    {
+        LOG("Quit flag set, exiting.");
+        co_return nullptr;
+    }
     if (result == nullptr) {
         LOG_ERROR("%s:%d Failed to connect to device.", __FILE__, __LINE__);
         co_return nullptr;
@@ -203,6 +223,11 @@ IAsyncOperation<BluetoothLEDevice> retrieveDevice(const wchar_t* deviceId) {
 
 IAsyncOperation<GattDeviceService> retrieveService(const wchar_t* deviceId, const wchar_t* serviceId) {
     auto device = co_await retrieveDevice(deviceId);
+    if (IsQuitFlagSet())
+    {
+        LOG("Quit flag set, exiting.");
+        co_return nullptr;
+    }
     if (device == nullptr)
         co_return nullptr;
 
@@ -216,6 +241,11 @@ IAsyncOperation<GattDeviceService> retrieveService(const wchar_t* deviceId, cons
     }
 
     GattDeviceServicesResult result = co_await device.GetGattServicesForUuidAsync(make_guid(serviceId), BluetoothCacheMode::Uncached);
+    if (IsQuitFlagSet())
+    {
+        LOG("Quit flag set, exiting.");
+        co_return nullptr;
+    }
     if (result.Status() != GattCommunicationStatus::Success) {
         LOG_ERROR("%s:%d Failed retrieving services.", __FILE__, __LINE__);
         co_return nullptr;
@@ -234,6 +264,11 @@ IAsyncOperation<GattDeviceService> retrieveService(const wchar_t* deviceId, cons
 
 IAsyncOperation<GattCharacteristic> retrieveCharacteristic(const wchar_t* deviceId, const wchar_t* serviceId, const wchar_t* characteristicId) {
     auto service = co_await retrieveService(deviceId, serviceId);
+    if (IsQuitFlagSet())
+    {
+        LOG("Quit flag set, exiting.");
+        co_return nullptr;
+    }
     if (service == nullptr)
         co_return nullptr;
 
@@ -248,6 +283,11 @@ IAsyncOperation<GattCharacteristic> retrieveCharacteristic(const wchar_t* device
     }
 
     GattCharacteristicsResult result = co_await service.GetCharacteristicsForUuidAsync(make_guid(characteristicId), BluetoothCacheMode::Uncached);
+    if (IsQuitFlagSet())
+    {
+        LOG("Quit flag set, exiting.");
+        co_return nullptr;
+    }
     if (result.Status() != GattCommunicationStatus::Success) {
         LOG_ERROR("%s:%d Error scanning characteristics from service %s with status %d", __WFILE__, __LINE__, serviceId, result.Status());
         co_return nullptr;
@@ -289,25 +329,12 @@ queue<BLEData> dataQueue;
 mutex dataQueueLock;
 condition_variable dataQueueSignal;
 
-bool quitFlag = false;
-mutex quitLock;
 
 mutex connectLock;
 
 
 
-winrt::Windows::Devices::Enumeration::DeviceWatcher deviceWatcher{ nullptr };
 
-bool QuittableWait(condition_variable& signal, unique_lock<mutex>& waitLock) {
-    signal.wait(waitLock, [] { return quitFlag; });
-    return quitFlag;
-}
-
-bool IsQuitFlagSet()
-{
-    std::lock_guard<std::mutex> lock(quitLock);
-    return quitFlag;
-}
 
 void ResetPluginState() {
     LOG("Starting to reset plugin state...");
@@ -650,7 +677,11 @@ fire_and_forget ScanServicesAsync(const wchar_t* deviceId)
         }
 
         auto bluetoothLeDevice = co_await BluetoothLEDevice::FromIdAsync(deviceId);
-
+        if (IsQuitFlagSet())
+        {
+            LOG("Quit flag set, exiting.");
+            co_return;
+        }
         if (bluetoothLeDevice == nullptr)
         {
             LOG_ERROR("Failed to connect to device.");
@@ -661,6 +692,11 @@ fire_and_forget ScanServicesAsync(const wchar_t* deviceId)
         }
 
         auto result = co_await bluetoothLeDevice.GetGattServicesAsync(BluetoothCacheMode::Uncached);
+        if (IsQuitFlagSet())
+        {
+            LOG("Quit flag set, exiting.");
+            co_return;
+        }
 
         if (result.Status() == GattCommunicationStatus::Success)
         {
@@ -757,7 +793,11 @@ fire_and_forget ScanCharacteristicsAsync(wchar_t* deviceId, wchar_t* serviceId)
         characteristicQueue = {}; // Clear the queue
 
         auto service = co_await retrieveService(deviceId, serviceId);
-
+        if (IsQuitFlagSet())
+        {
+            LOG("Quit flag set, exiting.");
+            co_return;
+        }
         if (service == nullptr)
         {
             LOG_ERROR("Failed to retrieve service.");
@@ -766,6 +806,11 @@ fire_and_forget ScanCharacteristicsAsync(wchar_t* deviceId, wchar_t* serviceId)
         }
 
         auto result = co_await service.GetCharacteristicsAsync(BluetoothCacheMode::Uncached);
+        if (IsQuitFlagSet())
+        {
+            LOG("Quit flag set, exiting.");
+            co_return;
+        }
 
         if (result.Status() == GattCommunicationStatus::Success)
         {
@@ -776,10 +821,20 @@ fire_and_forget ScanCharacteristicsAsync(wchar_t* deviceId, wchar_t* serviceId)
                 wcscpy_s(charStruct.uuid, sizeof(charStruct.uuid) / sizeof(wchar_t), winrt::to_hstring(characteristic.Uuid()).c_str());
 
                 auto descriptionResult = co_await characteristic.GetDescriptorsAsync();
+                if (IsQuitFlagSet())
+                {
+                    LOG("Quit flag set, exiting.");
+                    co_return;
+                }
                 if (descriptionResult.Status() == GattCommunicationStatus::Success && descriptionResult.Descriptors().Size() > 0)
                 {
                     auto descriptor = descriptionResult.Descriptors().GetAt(0);
                     auto readValueResult = co_await descriptor.ReadValueAsync();
+                    if (IsQuitFlagSet())
+                    {
+                        LOG("Quit flag set, exiting.");
+                        co_return;
+                    }
                     if (readValueResult.Status() == GattCommunicationStatus::Success)
                     {
                         auto reader = DataReader::FromBuffer(readValueResult.Value());
@@ -802,6 +857,11 @@ fire_and_forget ScanCharacteristicsAsync(wchar_t* deviceId, wchar_t* serviceId)
 
                 // Add a slight delay if needed to avoid tight loops
                 co_await resume_background(); // This can yield to other operations if necessary
+                if (IsQuitFlagSet())
+                {
+                    LOG("Quit flag set, exiting.");
+                    co_return;
+                }
             }
         }
         else
@@ -900,6 +960,11 @@ fire_and_forget ConnectDeviceAsync(wchar_t* deviceId)
         {
             std::lock_guard<std::mutex> lock(deviceLock);
             device = co_await BluetoothLEDevice::FromIdAsync(deviceId);
+            if (IsQuitFlagSet())
+            {
+                LOG("Quit flag set, exiting.");
+                co_return;
+            }
             deviceMap[std::wstring(deviceId)] = { device };
         }
        
@@ -1014,7 +1079,11 @@ fire_and_forget SubscribeCharacteristicAsync(const wchar_t* deviceId, const wcha
         auto start_time = std::chrono::steady_clock::now();
 
         auto characteristic = co_await retrieveCharacteristic(deviceId, serviceId, characteristicId);
-
+        if (IsQuitFlagSet())
+        {
+            LOG("Quit flag set, exiting.");
+            co_return;
+        }
         // Check for timeout
         if (std::chrono::steady_clock::now() - start_time > timeout)
         {
@@ -1050,7 +1119,34 @@ fire_and_forget SubscribeCharacteristicAsync(const wchar_t* deviceId, const wcha
             co_return;
         }
 
-        auto status = co_await characteristic.WriteClientCharacteristicConfigurationDescriptorAsync(GattClientCharacteristicConfigurationDescriptorValue::Notify);
+        GattCommunicationStatus status;
+        try
+        {
+            status = co_await characteristic.WriteClientCharacteristicConfigurationDescriptorAsync(GattClientCharacteristicConfigurationDescriptorValue::Notify);
+            if (IsQuitFlagSet())
+            {
+                LOG("Quit flag set, exiting.");
+                co_return;
+            }
+        }
+        catch (const winrt::hresult_error& ex)
+        {
+            LOG_ERROR("Exception during WriteClientCharacteristicConfigurationDescriptorAsync: ", winrt::to_string(ex.message()));
+            if (result != nullptr)
+            {
+                *result = false;
+            }
+            co_return;
+        }
+        if (IsQuitFlagSet())
+        {
+            LOG("Quit flag set, exiting SubscribeCharacteristicAsync.");
+            if (result != nullptr)
+            {
+                *result = false;
+            }
+            co_return;
+        }
 
         // Check for timeout
         if (std::chrono::steady_clock::now() - start_time > timeout)
@@ -1082,6 +1178,12 @@ fire_and_forget SubscribeCharacteristicAsync(const wchar_t* deviceId, const wcha
 
             subscription->revoker = characteristic.ValueChanged(auto_revoke, [deviceId, serviceId, characteristicId](GattCharacteristic const&, GattValueChangedEventArgs const& args)
                 {
+
+                    if (IsQuitFlagSet())
+                    {
+                        LOG("Quit flag set, exiting.");
+                        return;
+                    }
                     try
                     {
                         LOG("ValueChanged event triggered.");
@@ -1129,6 +1231,14 @@ fire_and_forget SubscribeCharacteristicAsync(const wchar_t* deviceId, const wcha
     {
         std::string error_message = "Error during SubscribeCharacteristicAsync: " + std::string(ex.what());
         LOG_ERROR(error_message.c_str());
+        if (result != nullptr)
+        {
+            *result = false;
+        }
+    }
+    catch (const winrt::hresult_error& ex)
+    {
+        LOG_ERROR("WinRT exception during SubscribeCharacteristicAsync: ", winrt::to_string(ex.message()));
         if (result != nullptr)
         {
             *result = false;
@@ -1204,11 +1314,21 @@ bool PollData(BLEData* data, bool block)
 fire_and_forget SendDataAsync(BLEData data, condition_variable* signal, bool* result) {
     try {
         auto characteristic = co_await retrieveCharacteristic(data.deviceId, data.serviceUuid, data.characteristicUuid);
+        if (IsQuitFlagSet())
+        {
+            LOG("Quit flag set, exiting.");
+            co_return;
+        }
         if (characteristic != nullptr) {
             DataWriter writer;
             writer.WriteBytes(array_view<uint8_t const>(data.buf, data.buf + data.size));
             IBuffer buffer = writer.DetachBuffer();
             auto status = co_await characteristic.WriteValueAsync(buffer, GattWriteOption::WriteWithoutResponse);
+            if (IsQuitFlagSet())
+            {
+                LOG("Quit flag set, exiting.");
+                co_return;
+            }
             if (status != GattCommunicationStatus::Success) {
                 LOG_ERROR("%s:%d Error writing value to characteristic with uuid %s", __FILE__, __LINE__, data.characteristicUuid);
             }
@@ -1247,6 +1367,11 @@ fire_and_forget ReadCharacteristicDataAsync(wchar_t* deviceId, wchar_t* serviceI
         LOG("Started ReadCharacteristicData...");
 
         auto characteristic = co_await retrieveCharacteristic(deviceId, serviceId, characteristicId);
+        if (IsQuitFlagSet())
+        {
+            LOG("Quit flag set, exiting.");
+            co_return;
+        }
         if (characteristic == nullptr) {
             LOG_ERROR("Failed to retrieve characteristic for data read.");
             if (result != nullptr) {
@@ -1257,6 +1382,12 @@ fire_and_forget ReadCharacteristicDataAsync(wchar_t* deviceId, wchar_t* serviceI
 
         // Read the characteristic value
         auto readResult = co_await characteristic.ReadValueAsync();
+        if (IsQuitFlagSet())
+        {
+            LOG("Quit flag set, exiting.");
+            co_return;
+        }
+
         if (readResult.Status() != GattCommunicationStatus::Success) {
             std::string message = "Error reading characteristic data with UUID: " + ConvertHStringToString(winrt::to_hstring(characteristic.Uuid())) + ", Status: " + std::to_string(static_cast<int>(readResult.Status()));
             LOG_ERROR(message.c_str());
